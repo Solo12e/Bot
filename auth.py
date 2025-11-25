@@ -14,17 +14,13 @@ import sqlite3
 from datetime import datetime, timedelta
 import secrets
 from typing import Tuple, Optional, List, Dict
+from config import OWNER_ID  # تأكد أن OWNER_ID معرف في config.py
 
 DB_PATH = "bot.db"  # تأكد أن هذا المسار متوافق مع config.py أو استبدله عند الاستيراد
 
 # ---------------------------
 # تهيئة قاعدة البيانات
 # ---------------------------
-def is_user_allowed(user_id):
-    # إذا كان المالك، سماح دائم
-    if user_id == OWNER_ID:
-        return True
-    # باقي الشيكات الاعتيادية
 def init_auth_db(db_path: str = DB_PATH):
     conn = sqlite3.connect(db_path, check_same_thread=False)
     cur = conn.cursor()
@@ -64,14 +60,33 @@ def init_auth_db(db_path: str = DB_PATH):
     conn.close()
 
 # ---------------------------
+# دالة تحقق المستخدم
+# ---------------------------
+def is_user_allowed(user_id: int, db_path: str = DB_PATH) -> bool:
+    # السماح التلقائي للمالك
+    if user_id == OWNER_ID:
+        return True
+    # باقي التحقق الاعتيادي للمستخدمين
+    conn = sqlite3.connect(db_path, check_same_thread=False)
+    cur = conn.cursor()
+    cur.execute("SELECT allowed FROM users WHERE user_id=?", (user_id,))
+    row = cur.fetchone()
+    conn.close()
+    return bool(row and row[0] == 1)
+
+def is_user_banned(user_id: int, db_path: str = DB_PATH) -> bool:
+    conn = sqlite3.connect(db_path, check_same_thread=False)
+    cur = conn.cursor()
+    cur.execute("SELECT banned FROM users WHERE user_id=?", (user_id,))
+    row = cur.fetchone()
+    conn.close()
+    return bool(row and row[0] == 1)
+
+# ---------------------------
 # إدارة الرموز (Access Codes)
 # ---------------------------
 def create_access_code(days_valid: int = 7, db_path: str = DB_PATH) -> Tuple[str, str]:
-    """
-    ينشئ رمزًا عشوائياً مع مدة صلاحية بالأيام.
-    يعيد: (code, expires_at_iso)
-    """
-    code = secrets.token_hex(6)  # رمز طول 12 بالهيكس
+    code = secrets.token_hex(6)
     created = datetime.utcnow()
     expires = created + timedelta(days=days_valid)
     conn = sqlite3.connect(db_path, check_same_thread=False)
@@ -85,10 +100,6 @@ def create_access_code(days_valid: int = 7, db_path: str = DB_PATH) -> Tuple[str
     return code, expires.isoformat()
 
 def deactivate_access_code(code: str, db_path: str = DB_PATH) -> bool:
-    """
-    يعطّل رمز الوصول (يجعل active = 0).
-    يعيد True إذا تم التحديث، False إن لم يوجد.
-    """
     conn = sqlite3.connect(db_path, check_same_thread=False)
     cur = conn.cursor()
     cur.execute("UPDATE access_codes SET active=0 WHERE code=?", (code,))
@@ -98,10 +109,6 @@ def deactivate_access_code(code: str, db_path: str = DB_PATH) -> bool:
     return changed
 
 def extend_access_code(code: str, extra_days: int, db_path: str = DB_PATH) -> bool:
-    """
-    يمدد صلاحية رمز موجود بعدد أيام إضافي.
-    يعيد True إذا تم التحديث بنجاح.
-    """
     conn = sqlite3.connect(db_path, check_same_thread=False)
     cur = conn.cursor()
     cur.execute("SELECT expires_at FROM access_codes WHERE code=?", (code,))
@@ -117,9 +124,6 @@ def extend_access_code(code: str, extra_days: int, db_path: str = DB_PATH) -> bo
     return True
 
 def list_access_codes(db_path: str = DB_PATH) -> List[Dict]:
-    """
-    يعيد قائمة بكل الرموز مع تفاصيلها.
-    """
     conn = sqlite3.connect(db_path, check_same_thread=False)
     cur = conn.cursor()
     cur.execute("SELECT code, created_at, expires_at, active, assigned_user_id FROM access_codes ORDER BY created_at DESC")
@@ -129,10 +133,6 @@ def list_access_codes(db_path: str = DB_PATH) -> List[Dict]:
     return [dict(zip(keys, r)) for r in rows]
 
 def validate_and_assign_code(code: str, user_id: int, db_path: str = DB_PATH) -> Tuple[bool, str]:
-    """
-    يتحقق من الرمز: وجوده، فعاليته، وصلاحيته.
-    إذا صالح، يقوم بربطه بالمستخدم (assigned_user_id) ويعيد (True, message).
-    """
     conn = sqlite3.connect(db_path, check_same_thread=False)
     cur = conn.cursor()
     cur.execute("SELECT code, expires_at, active FROM access_codes WHERE code=?", (code,))
@@ -147,7 +147,6 @@ def validate_and_assign_code(code: str, user_id: int, db_path: str = DB_PATH) ->
     if datetime.fromisoformat(expires_at) < datetime.utcnow():
         conn.close()
         return False, "انتهت صلاحية الرمز."
-    # ربط الرمز بالمستخدم
     cur.execute("UPDATE access_codes SET assigned_user_id=? WHERE code=?", (user_id, code))
     conn.commit()
     conn.close()
@@ -159,9 +158,6 @@ def validate_and_assign_code(code: str, user_id: int, db_path: str = DB_PATH) ->
 def upsert_user(user_id: int, username: Optional[str] = None,
                 first_name: Optional[str] = None, last_name: Optional[str] = None,
                 db_path: str = DB_PATH) -> None:
-    """
-    يدرج أو يحدث بيانات المستخدم مع تحديث last_seen.
-    """
     now = datetime.utcnow().isoformat()
     conn = sqlite3.connect(db_path, check_same_thread=False)
     cur = conn.cursor()
@@ -197,22 +193,6 @@ def unban_user(user_id: int, db_path: str = DB_PATH) -> None:
     cur.execute("UPDATE users SET banned=0 WHERE user_id=?", (user_id,))
     conn.commit()
     conn.close()
-
-def is_user_allowed(user_id: int, db_path: str = DB_PATH) -> bool:
-    conn = sqlite3.connect(db_path, check_same_thread=False)
-    cur = conn.cursor()
-    cur.execute("SELECT allowed FROM users WHERE user_id=?", (user_id,))
-    row = cur.fetchone()
-    conn.close()
-    return bool(row and row[0] == 1)
-
-def is_user_banned(user_id: int, db_path: str = DB_PATH) -> bool:
-    conn = sqlite3.connect(db_path, check_same_thread=False)
-    cur = conn.cursor()
-    cur.execute("SELECT banned FROM users WHERE user_id=?", (user_id,))
-    row = cur.fetchone()
-    conn.close()
-    return bool(row and row[0] == 1)
 
 def get_user_info(user_id: int, db_path: str = DB_PATH) -> Optional[Dict]:
     conn = sqlite3.connect(db_path, check_same_thread=False)
@@ -257,9 +237,6 @@ def get_activity_logs(limit: int = 200, db_path: str = DB_PATH) -> List[Dict]:
 # أدوات مساعدة صغيرة
 # ---------------------------
 def assign_code_to_user(code: str, user_id: int, db_path: str = DB_PATH) -> bool:
-    """
-    يربط رمزًا بمستخدم دون التحقق من الصلاحية (استعمال داخلي بعد التحقق).
-    """
     conn = sqlite3.connect(db_path, check_same_thread=False)
     cur = conn.cursor()
     cur.execute("UPDATE access_codes SET assigned_user_id=? WHERE code=?", (user_id, code))
@@ -274,9 +251,9 @@ def assign_code_to_user(code: str, user_id: int, db_path: str = DB_PATH) -> bool
 try:
     init_auth_db(DB_PATH)
 except Exception:
-    # تجاهل الأخطاء هنا؛ يفضل في main.py استدعاء init_auth_db صراحةً
     pass
 
 # ---------------------------
 # نهاية الملف
+# --------------------------
 # ---------------------------
