@@ -20,6 +20,11 @@ DB_PATH = "bot.db"  # تأكد أن هذا المسار متوافق مع config
 # ---------------------------
 # تهيئة قاعدة البيانات
 # ---------------------------
+def is_user_allowed(user_id):
+    # إذا كان المالك، سماح دائم
+    if user_id == OWNER_ID:
+        return True
+    # باقي الشيكات الاعتيادية
 def init_auth_db(db_path: str = DB_PATH):
     conn = sqlite3.connect(db_path, check_same_thread=False)
     cur = conn.cursor()
